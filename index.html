@@ -1,0 +1,1452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TIMEGRAPHER</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=B612+Mono:wght@400;700&family=B612:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #0a0e0f;
+  --bg-panel:    #0e1416;
+  --bg-inset:    #080b0c;
+  --bevel-light: #1e2a2d;
+  --text-pri:    #e8e8e8;
+  --text-sec:    #7a8a8e;
+  --text-dim:    #3a4a4e;
+  --green:       #39d353;
+  --cyan:        #00bfff;
+  --amber:       #ffbf00;
+  --red:         #cc2200;
+  --ok-green:    #00aa44;
+  --font-main:   'B612', sans-serif;
+  --font-mono:   'B612 Mono', monospace;
+}
+
+/* Allow body to scroll on small screens instead of clipping */
+html {
+  height: 100%;
+  background: var(--bg);
+}
+body {
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text-pri);
+  font-family: var(--font-main);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* CRT scanline */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px, transparent 1px,
+    rgba(0,0,0,0.06) 1px, rgba(0,0,0,0.06) 2px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Vignette */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.5) 100%);
+  pointer-events: none;
+  z-index: 9998;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  /* fill the dynamic viewport on iOS Safari (15.4+), fall back to 100vh */
+  min-height: 100vh;
+  min-height: 100dvh;
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 6px;
+  gap: 5px;
+  padding-bottom: max(6px, env(safe-area-inset-bottom));
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--bevel-light);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.03),
+    inset 0 -1px 0 rgba(0,0,0,0.4),
+    0 2px 6px rgba(0,0,0,0.5);
+}
+
+/* ── Header ── */
+#header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 8px;
+}
+#title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: var(--text-sec);
+  text-transform: uppercase;
+}
+#status-pill {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  padding: 2px 7px;
+  border: 1px solid var(--text-dim);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  transition: all 0.3s;
+}
+#status-pill.acquiring { border-color: var(--amber); color: var(--amber); text-shadow: 0 0 6px var(--amber); }
+#status-pill.active    { border-color: var(--green);  color: var(--green);  text-shadow: 0 0 6px var(--green); }
+
+/* ── Oscilloscope ── */
+#scope-panel {
+  position: relative;
+  height: 64px;
+  overflow: hidden;
+}
+#scope-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+#scope-label {
+  position: absolute;
+  top: 4px; left: 6px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+#scope-snr {
+  position: absolute;
+  top: 4px; right: 6px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+/* ── Metrics ── */
+#metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+.metric-cell {
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.metric-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: var(--text-sec);
+  text-transform: uppercase;
+}
+.metric-value {
+  font-family: var(--font-mono);
+  /* Scale between 18px (tiny screen) and 26px (large), targeting ~5.5vw */
+  font-size: clamp(18px, 5.5vw, 26px);
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--text-pri);
+  letter-spacing: -0.5px;
+  transition: color 0.4s, text-shadow 0.4s;
+}
+.metric-value.good    { color: var(--ok-green); text-shadow: 0 0 10px rgba(0,170,68,0.4); }
+.metric-value.caution { color: var(--amber);    text-shadow: 0 0 10px rgba(255,191,0,0.4); }
+.metric-value.warn    { color: var(--red);      text-shadow: 0 0 10px rgba(204,34,0,0.4); }
+.metric-value.cyan    { color: var(--cyan);     text-shadow: 0 0 10px rgba(0,191,255,0.35); }
+.metric-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-sec);
+  letter-spacing: 0.5px;
+  min-height: 13px;
+}
+.metric-unit {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+
+/* ── Tick trace ── */
+#trace-container {
+  flex: 1;
+  min-height: 140px;
+  position: relative;
+  overflow: hidden;
+}
+#trace-canvas { display: block; width: 100%; height: 100%; }
+
+/* Y-axis HTML labels overlay */
+#trace-labels {
+  position: absolute;
+  top: 0; left: 0;
+  height: 100%; width: 34px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 3px 0;
+  pointer-events: none;
+}
+.trace-label {
+  font-family: var(--font-mono);
+  font-size: 7px;
+  color: var(--text-dim);
+  text-align: right;
+  padding-right: 3px;
+  letter-spacing: 0.5px;
+}
+
+/* ── Signal row ── */
+#signal-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+}
+#signal-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: var(--text-sec);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+#level-bar-outer {
+  flex: 1;
+  height: 5px;
+  background: var(--bg-inset);
+  border: 1px solid var(--bevel-light);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+#level-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--green);
+  box-shadow: 0 0 5px var(--green);
+  transition: width 0.05s linear, background 0.2s, box-shadow 0.2s;
+}
+#level-bar-fill.dim  { background: var(--text-dim); box-shadow: none; }
+#level-bar-fill.hot  { background: var(--amber);    box-shadow: 0 0 5px var(--amber); }
+#snr-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 44px;
+  text-align: right;
+}
+
+/* ── Controls ── */
+#controls {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 8px;
+}
+#controls-row1, #controls-row2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ctrl-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ctrl-label {
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 2px;
+  color: var(--text-sec);
+  text-transform: uppercase;
+}
+select, input[type="number"] {
+  background: var(--bg-inset);
+  border: 1px solid var(--bevel-light);
+  color: var(--text-pri);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 5px;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  outline: none;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
+}
+select:focus, input[type="number"]:focus {
+  border-color: var(--cyan);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.5), 0 0 5px rgba(0,191,255,0.2);
+}
+input[type="number"] {
+  width: 50px;
+  -moz-appearance: textfield;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
+
+/* Range sliders — cockpit style */
+.slider-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 3px;
+  background: var(--bevel-light);
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  border-radius: 0;
+  background: var(--green);
+  box-shadow: 0 0 5px rgba(57,211,83,0.5);
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 12px; height: 12px;
+  border: none; border-radius: 0;
+  background: var(--green);
+  box-shadow: 0 0 5px rgba(57,211,83,0.5);
+  cursor: pointer;
+}
+.slider-val {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--green);
+  white-space: nowrap;
+  min-width: 28px;
+}
+
+/* ── Start button ── */
+#start-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  padding: 7px 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--green);
+  color: var(--green);
+  cursor: pointer;
+  transition: all 0.2s;
+  text-shadow: 0 0 7px rgba(57,211,83,0.3);
+  box-shadow: 0 0 7px rgba(57,211,83,0.1);
+  white-space: nowrap;
+  align-self: flex-end;
+}
+#start-btn:active { opacity: 0.7; }
+#start-btn.running {
+  border-color: var(--amber);
+  color: var(--amber);
+  text-shadow: 0 0 7px rgba(255,191,0,0.3);
+  box-shadow: 0 0 7px rgba(255,191,0,0.1);
+}
+
+/* ── Bottom row ── */
+#bottom-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 4px 2px;
+}
+.btn-ghost {
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  background: none;
+  border: 1px solid var(--text-dim);
+  color: var(--text-dim);
+  padding: 3px 7px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-ghost:active { opacity: 0.6; }
+#tick-count-label {
+  font-family: var(--font-mono);
+  font-size: 7px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+
+/* ── Info overlay ── */
+#info-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.88);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+#info-overlay.visible { display: flex; }
+#info-box {
+  max-width: 420px; width: 100%;
+  padding: 18px;
+  border: 1px solid var(--bevel-light);
+  background: var(--bg-panel);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-sec);
+}
+#info-box h2 {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: var(--green);
+  text-shadow: 0 0 7px rgba(57,211,83,0.4);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+}
+#info-box p { margin-bottom: 7px; }
+#info-box strong { color: var(--text-pri); font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="header">
+    <span id="title">Timegrapher</span>
+    <span id="status-pill">STANDBY</span>
+  </div>
+
+  <!-- Oscilloscope: shows filtered envelope so you can see if signal is reaching the detector -->
+  <div id="scope-panel" class="panel">
+    <canvas id="scope-canvas"></canvas>
+    <span id="scope-label">SIGNAL</span>
+    <span id="scope-snr">—</span>
+  </div>
+
+  <!-- Metrics -->
+  <div id="metrics">
+    <div class="metric-cell panel">
+      <div class="metric-label">Rate</div>
+      <div class="metric-value" id="val-rate">—</div>
+      <div class="metric-sub" id="val-rate-smooth" title="8-second average"></div>
+      <div class="metric-unit">s / day</div>
+    </div>
+    <div class="metric-cell panel">
+      <div class="metric-label">Beat Error</div>
+      <div class="metric-value" id="val-beat">—</div>
+      <div class="metric-unit">ms</div>
+    </div>
+    <div class="metric-cell panel">
+      <div class="metric-label">Amplitude</div>
+      <div class="metric-value" id="val-amp">—</div>
+      <div class="metric-unit">deg</div>
+    </div>
+    <div class="metric-cell panel">
+      <div class="metric-label">BPH</div>
+      <div class="metric-value cyan" id="val-bph">—</div>
+      <div class="metric-unit">beats / hr</div>
+    </div>
+  </div>
+
+  <!-- Tick trace -->
+  <div id="trace-container" class="panel">
+    <canvas id="trace-canvas"></canvas>
+    <div id="trace-labels">
+      <span class="trace-label">+120</span>
+      <span class="trace-label">+60</span>
+      <span class="trace-label">+30</span>
+      <span class="trace-label">+10</span>
+      <span class="trace-label">0</span>
+      <span class="trace-label">−10</span>
+      <span class="trace-label">−30</span>
+      <span class="trace-label">−60</span>
+      <span class="trace-label">−120</span>
+    </div>
+  </div>
+
+  <!-- Signal level -->
+  <div id="signal-row" class="panel">
+    <span id="signal-label">Level</span>
+    <div id="level-bar-outer">
+      <div id="level-bar-fill" class="dim"></div>
+    </div>
+    <span id="snr-label">— dB</span>
+  </div>
+  <div id="hint-bar" style="display:none;padding:4px 8px;">
+    <span id="hint-text" style="font-family:var(--font-mono);font-size:8px;letter-spacing:1.5px;color:var(--amber);text-shadow:0 0 6px rgba(255,191,0,0.4);text-transform:uppercase;"></span>
+  </div>
+
+  <!-- Controls -->
+  <div id="controls" class="panel">
+    <div id="controls-row1">
+      <div class="ctrl-group">
+        <span class="ctrl-label">BPH</span>
+        <select id="sel-bph">
+          <option value="auto">AUTO</option>
+          <option value="18000">18000</option>
+          <option value="21600">21600</option>
+          <option value="25200">25200</option>
+          <option value="28800" selected>28800</option>
+          <option value="36000">36000</option>
+          <option value="72000">72000</option>
+        </select>
+      </div>
+      <div class="ctrl-group">
+        <span class="ctrl-label">Lift °</span>
+        <input id="lift-input" type="number" value="52" min="40" max="60" step="1">
+      </div>
+      <button id="start-btn">▶ START</button>
+    </div>
+    <div id="controls-row-mic" style="display:flex;align-items:center;gap:6px;">
+      <div class="ctrl-group" style="flex:1">
+        <span class="ctrl-label">Microphone</span>
+        <select id="sel-mic" style="width:100%;max-width:100%;">
+          <option value="">Default</option>
+        </select>
+      </div>
+      <button class="btn-ghost" id="refresh-mic-btn" style="margin-top:10px;white-space:nowrap;">↺ REFRESH</button>
+    </div>
+    <div id="controls-row2">
+      <div class="slider-group">
+        <span class="ctrl-label">Gain</span>
+        <div class="slider-row">
+          <input type="range" id="gain-slider" min="1" max="50" step="1" value="15">
+          <span class="slider-val" id="gain-val">15×</span>
+        </div>
+      </div>
+      <div class="slider-group">
+        <span class="ctrl-label">Sensitivity</span>
+        <div class="slider-row">
+          <input type="range" id="sens-slider" min="1.2" max="6" step="0.1" value="2.0">
+          <span class="slider-val" id="sens-val">2.0</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="bottom-row">
+    <button class="btn-ghost" id="reset-btn">RESET</button>
+    <span id="tick-count-label">TICKS: 0</span>
+    <button class="btn-ghost" id="monitor-btn" title="Debug: route filtered+gained mic to headphones">MON OFF</button>
+    <button class="btn-ghost" id="rec-btn">⏺ REC</button>
+    <button class="btn-ghost" id="info-btn">INFO</button>
+  </div>
+  <div id="rec-timer-bar" style="display:none;padding:2px 8px;">
+    <span id="rec-timer" style="font-family:var(--font-mono);font-size:8px;color:var(--red);letter-spacing:2px;">● REC 0:00</span>
+  </div>
+
+</div>
+
+<!-- Info overlay -->
+<div id="info-overlay">
+  <div id="info-box">
+    <h2>Usage</h2>
+    <p><strong>1.</strong> Place the watch directly on the laptop keyboard deck (left side, near the mic — <em>not</em> the speaker). On iPhone, rest the mic corner on the watch case. The watch must physically touch the device — air coupling is insufficient for quiet movements.</p>
+    <p><strong>2.</strong> Set BPH (28800 for most modern watches, including Omega Seamaster). Leave on AUTO to detect.</p>
+    <p><strong>3.</strong> Enter the lift angle (52° for most ETA/co-axial movements).</p>
+    <p><strong>4.</strong> If the oscilloscope shows no peaks, raise <strong>GAIN</strong>. If false triggers appear, raise <strong>SENSITIVITY</strong> (higher = harder to trigger).</p>
+    <p><strong>5.</strong> Allow 30–60 s for the trace to stabilize.</p>
+    <p><strong>Rate:</strong> s/day gained (+) or lost (–). COSC: −4 to +6.</p>
+    <p><strong>Beat error:</strong> tick vs tock asymmetry. &lt;0.5 ms is good.</p>
+    <p><strong>Amplitude:</strong> balance wheel swing. 270–310° is healthy.</p>
+    <p><em>Tip: the oscilloscope at the top shows the filtered envelope in real time. You should see clear peaks for each tick — use Gain and Sensitivity to tune until peaks exceed the amber threshold line.</em></p>
+    <button class="btn-ghost" id="info-close" style="margin-top:12px">CLOSE</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── Inline processor source (always used via Blob URL — works everywhere) ──────
+// Keep in sync with processor.js
+const PROCESSOR_SRC = `
+const SCOPE_CHUNK = 512;
+class TimegrapherProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this._hpB = [0.94133, -1.88267, 0.94133];
+    this._hpA = [1.0, -1.87984, 0.88612];
+    this._hpZ = [0, 0];
+    this._lpB = [0.05711, 0.11421, 0.05711];
+    this._lpA = [1.0, -1.22006, 0.44796];
+    this._lpZ = [0, 0];
+    this._gain = 5.0;
+    this._envelope  = 0;
+    this._envAttack  = 1 - Math.exp(-1 / (0.0005 * sampleRate));
+    this._envRelease = 1 - Math.exp(-1 / (0.020  * sampleRate));
+    this._noiseFloor = 0.001;
+    this._noiseDecay = 1 - Math.exp(-1 / (2.0 * sampleRate));
+    this._thresholdMult = 2.5;
+    this._samplesAbove = 0;
+    this._debounceMin = 3858;
+    this._samplesSinceTick = 99999;
+    this._aboveThreshold = false;
+    this._peakVal = 0;
+    this._peakSample = 0;
+    this._sampleCount = 0;
+    this._rmsAccum = 0;
+    this._rmsCount = 0;
+    this._rmsInterval = Math.round(0.050 * sampleRate);
+    this._scopeBuf = new Float32Array(SCOPE_CHUNK);
+    this._scopeIdx = 0;
+    this._currentThreshold = 0;
+    this.port.onmessage = ({ data }) => {
+      if (data.type === 'setBPH') {
+        this._debounceMin = Math.floor(3600 / data.bph * sampleRate * 0.70);
+      }
+      if (data.type === 'setGain')      this._gain = Math.max(1, Math.min(50, data.value));
+      if (data.type === 'setThreshold') this._thresholdMult = Math.max(1.2, Math.min(10, data.value));
+      if (data.type === 'reset') {
+        this._sampleCount = 0; this._envelope = 0; this._noiseFloor = 0.001;
+        this._aboveThreshold = false; this._samplesAbove = 0; this._peakVal = 0; this._samplesSinceTick = 99999;
+        this._hpZ = [0,0]; this._lpZ = [0,0];
+        this._rmsAccum = 0; this._rmsCount = 0; this._scopeIdx = 0;
+      }
+    };
+  }
+  _iir2(x, b, a, z) {
+    const y = b[0] * x + z[0];
+    z[0] = b[1] * x - a[1] * y + z[1];
+    z[1] = b[2] * x - a[2] * y;
+    return y;
+  }
+  process(inputs) {
+    const ch = inputs[0]?.[0];
+    if (!ch) return true;
+    for (let i = 0; i < ch.length; i++) {
+      let s = ch[i] * this._gain;
+      s = this._iir2(s, this._hpB, this._hpA, this._hpZ);
+      s = this._iir2(s, this._lpB, this._lpA, this._lpZ);
+      const rect = Math.abs(s);
+      const alpha = rect > this._envelope ? this._envAttack : this._envRelease;
+      this._envelope += alpha * (rect - this._envelope);
+      if (this._envelope < this._noiseFloor * 3.0) {
+        const rate = this._envelope < this._noiseFloor ? this._noiseDecay * 2 : this._noiseDecay * 0.1;
+        this._noiseFloor += rate * (this._envelope - this._noiseFloor);
+      }
+      const minFloor = 0.00002 / this._gain;
+      if (this._noiseFloor < minFloor) this._noiseFloor = minFloor;
+      const threshold = this._noiseFloor * this._thresholdMult;
+      this._currentThreshold = threshold;
+      const above = this._envelope > threshold;
+      if (above && !this._aboveThreshold) {
+        this._aboveThreshold = true; this._samplesAbove = 0;
+        this._peakVal = this._envelope; this._peakSample = this._sampleCount + i;
+      } else if (above) {
+        this._samplesAbove++;
+        if (this._envelope > this._peakVal) { this._peakVal = this._envelope; this._peakSample = this._sampleCount + i; }
+        if (this._samplesAbove > this._debounceMin * 2 && this._samplesSinceTick >= this._debounceMin) {
+          this._noiseFloor = this._envelope / this._thresholdMult * 1.2;
+          this._aboveThreshold = false; this._samplesAbove = 0; this._peakVal = 0;
+        }
+      } else if (!above && this._aboveThreshold) {
+        this._aboveThreshold = false; this._samplesAbove = 0;
+        if (this._samplesSinceTick >= this._debounceMin) {
+          this._samplesSinceTick = 0;
+          this.port.postMessage({ type: 'tick', sampleTime: this._peakSample, snr: this._peakVal / Math.max(this._noiseFloor, 1e-9) });
+        }
+        this._peakVal = 0;
+      }
+      this._samplesSinceTick++;
+      this._rmsAccum += this._envelope * this._envelope;
+      this._rmsCount++;
+      this._scopeBuf[this._scopeIdx++] = this._envelope;
+      if (this._scopeIdx >= SCOPE_CHUNK) {
+        this.port.postMessage({ type: 'scope', data: this._scopeBuf, threshold, noiseFloor: this._noiseFloor }, [this._scopeBuf.buffer]);
+        this._scopeBuf = new Float32Array(SCOPE_CHUNK);
+        this._scopeIdx = 0;
+      }
+    }
+    this._sampleCount += ch.length;
+    if (this._rmsCount >= this._rmsInterval) {
+      const rms = Math.sqrt(this._rmsAccum / this._rmsCount);
+      this.port.postMessage({ type: 'level', rms, noiseFloor: this._noiseFloor, threshold: this._currentThreshold });
+      this._rmsAccum = 0; this._rmsCount = 0;
+    }
+    return true;
+  }
+}
+registerProcessor('timegrapher-processor', TimegrapherProcessor);
+`;
+
+// ── Constants ────────────────────────────────────────────────────────────────
+const TARGET_SR          = 44100; // requested sample rate (hint to browser)
+let   actualSR           = 44100; // real rate from AudioContext — set on start
+const TRACE_Y_RANGE      = 120;   // ±120 s/day
+const TRACE_DOT_R        = 2.0;
+const MIN_TICKS_DISPLAY  = 8;
+
+// Scope ring buffer: holds 8192 envelope samples (~185 ms at 44100 Hz)
+const SCOPE_SIZE    = 8192;
+const scopeBuf      = new Float32Array(SCOPE_SIZE);
+let   scopeWritePos = 0;
+let   scopeSampleCount = 0;   // cumulative samples received from worklet
+let   scopeThreshold   = 0;
+let   scopeNoiseFloor  = 0;
+let   scopeMaxSeen     = 0.001;
+
+// Recent tick events for oscilloscope markers
+// Each entry: { sampleTime, parity }
+const scopeTickMarkers = [];
+
+// ── State ────────────────────────────────────────────────────────────────────
+let audioCtx = null, workletNode = null, stream = null, running = false;
+let micSource = null;       // MediaStreamSourceNode — kept so monitor can tap it
+let startTime = 0;          // Date.now() when audio started
+let weakSnrSince = 0;       // Date.now() when SNR first went low (0 = not low)
+
+// Monitor (debug listen-through)
+let monActive = false;
+let monGain = null, monHPF = null, monLPF = null;
+
+// Processed stream for recording (gain + bandpass, always active while running)
+let procDest = null;   // MediaStreamDestinationNode
+let procGain = null, procHPF = null, procLPF = null;
+
+// Recorder
+let mediaRecorder = null;
+let recChunks = [];
+let recTimerId = null;
+let recStartMs = 0;
+
+let bphDetected = null, bphFixed = null, liftAngle = 52;
+let parity = 0, tickCount = 0, lastSampleTime = null, lastSnr = null;
+
+const tickIntervals  = [];  // { parity, intervalSec, snr }
+const tickTimestamps = [];  // { sampleTime, snr } — raw timestamps for phasor BPH + pairwise rate
+const MAX_INT        = 500;
+const MAX_TS         = 500;
+
+let displayRate = null, displayRateSmooth = null, displayBeatError = null, displayAmplitude = null;
+
+// Trace points: { x ∈ [0,1], y ∈ [0,1], parity }
+const tracePoints = [];
+const MAX_TRACE   = 2000;
+
+// ── Canvas: tick trace ───────────────────────────────────────────────────────
+const traceCanvas = document.getElementById('trace-canvas');
+const traceCtx    = traceCanvas.getContext('2d');
+let canvasW = 0, canvasH = 0;
+
+function resizeTrace() {
+  const r = document.getElementById('trace-container').getBoundingClientRect();
+  traceCanvas.width  = Math.floor(r.width);
+  traceCanvas.height = Math.floor(r.height);
+  canvasW = traceCanvas.width;
+  canvasH = traceCanvas.height;
+  drawTrace();
+}
+
+// ── Canvas: oscilloscope ─────────────────────────────────────────────────────
+const scopeCanvas = document.getElementById('scope-canvas');
+const scopeCtx    = scopeCanvas.getContext('2d');
+
+function resizeScope() {
+  const r = document.getElementById('scope-panel').getBoundingClientRect();
+  scopeCanvas.width  = Math.floor(r.width);
+  scopeCanvas.height = Math.floor(r.height);
+  drawScope();
+}
+
+window.addEventListener('resize', () => { resizeTrace(); resizeScope(); });
+setTimeout(() => { resizeTrace(); resizeScope(); }, 120);
+
+// ── Draw oscilloscope ────────────────────────────────────────────────────────
+function drawScope() {
+  const W = scopeCanvas.width, H = scopeCanvas.height;
+  if (!W || !H) return;
+  const ctx = scopeCtx;
+
+  ctx.fillStyle = '#080b0c';
+  ctx.fillRect(0, 0, W, H);
+
+  // Auto-scale: max of last full buffer, with decay
+  let max = 0;
+  for (let i = 0; i < SCOPE_SIZE; i++) {
+    if (scopeBuf[i] > max) max = scopeBuf[i];
+  }
+  scopeMaxSeen = Math.max(scopeMaxSeen * 0.995, max);
+  const scale = (H * 0.82) / Math.max(scopeMaxSeen, 0.0001);
+
+  // Noise floor line (very dim)
+  const nfY = H - scopeNoiseFloor * scale;
+  if (nfY > 0 && nfY < H) {
+    ctx.strokeStyle = 'rgba(57,211,83,0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, nfY); ctx.lineTo(W, nfY);
+    ctx.stroke();
+  }
+
+  // Threshold line (amber)
+  const thY = H - scopeThreshold * scale;
+  if (thY > 0 && thY < H) {
+    ctx.strokeStyle = 'rgba(255,191,0,0.55)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(0, thY); ctx.lineTo(W, thY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Envelope waveform (green)
+  ctx.strokeStyle = '#39d353';
+  ctx.lineWidth = 1.5;
+  ctx.shadowColor = '#39d353';
+  ctx.shadowBlur = 3;
+  ctx.beginPath();
+  for (let i = 0; i < SCOPE_SIZE; i++) {
+    const idx = (scopeWritePos + i) % SCOPE_SIZE;
+    const x = (i / (SCOPE_SIZE - 1)) * W;
+    const y = H - scopeBuf[idx] * scale;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Tick markers: vertical lines where ticks were detected
+  // Map sampleTime → x position: x = (1 - (scopeSampleCount - sampleTime)/SCOPE_SIZE) * W
+  for (const m of scopeTickMarkers) {
+    const offset = scopeSampleCount - m.sampleTime;
+    if (offset < 0 || offset >= SCOPE_SIZE) continue;
+    const x = (1 - offset / SCOPE_SIZE) * W;
+    ctx.strokeStyle = m.parity === 0
+      ? 'rgba(57,211,83,0.7)'    // tick: green
+      : 'rgba(0,191,255,0.7)';   // tock: cyan
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+  }
+}
+
+// ── Draw tick trace ──────────────────────────────────────────────────────────
+const TRACE_LEFT_PAD = 34;
+const Y_MARKS = [120, 60, 30, 10, 0, -10, -30, -60, -120];
+
+function rateToY(r, h) {
+  return Math.round(((TRACE_Y_RANGE - r) / (2 * TRACE_Y_RANGE)) * h);
+}
+
+function drawTrace() {
+  if (!canvasW || !canvasH) return;
+  const ctx = traceCtx, W = canvasW, H = canvasH;
+  const plotW = W - TRACE_LEFT_PAD;
+
+  ctx.fillStyle = '#080b0c';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid lines
+  for (const r of Y_MARKS) {
+    const y = rateToY(r, H);
+    ctx.strokeStyle = (r === 0) ? '#1a3020' : '#0f1e12';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(TRACE_LEFT_PAD, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+
+  // Dots
+  for (const pt of tracePoints) {
+    const x = TRACE_LEFT_PAD + pt.x * plotW;
+    const y = pt.y * H;
+    ctx.beginPath();
+    ctx.arc(x, y, TRACE_DOT_R, 0, Math.PI * 2);
+    if (pt.parity === 0) {
+      ctx.fillStyle = '#39d353';
+      ctx.shadowColor = '#39d353';
+    } else {
+      ctx.fillStyle = '#00bfff';
+      ctx.shadowColor = '#00bfff';
+    }
+    ctx.shadowBlur = 4;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  // Right "now" edge
+  ctx.strokeStyle = '#1e2a2d';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(W - 1, 0);
+  ctx.lineTo(W - 1, H);
+  ctx.stroke();
+}
+
+// ── Tick processing ──────────────────────────────────────────────────────────
+function onTick(sampleTime, snr) {
+  tickCount++;
+  document.getElementById('tick-count-label').textContent = `TICKS: ${tickCount}`;
+
+  const bph = bphFixed || bphDetected || 28800;
+
+  if (lastSampleTime !== null) {
+    const intervalSec = (sampleTime - lastSampleTime) / actualSR;
+    parity = 1 - parity;
+    // Use the minimum SNR of the two ticks bounding this interval
+    const intervalSnr = Math.min(snr ?? 1, lastSnr ?? 1);
+
+    tickIntervals.push({ parity, intervalSec, snr: intervalSnr });
+    if (tickIntervals.length > MAX_INT) tickIntervals.shift();
+
+    if (!bphFixed && tickIntervals.length >= 16) tryDetectBph();
+
+    if (tickIntervals.length >= MIN_TICKS_DISPLAY) computeAndDisplay(bph);
+  }
+  lastSampleTime = sampleTime;
+  lastSnr = snr ?? 1;
+
+  tickTimestamps.push({ sampleTime, snr: snr ?? 1 });
+  if (tickTimestamps.length > MAX_TS) tickTimestamps.shift();
+
+  // Store for oscilloscope marker (keep at most 64)
+  scopeTickMarkers.push({ sampleTime, parity });
+  if (scopeTickMarkers.length > 64) scopeTickMarkers.shift();
+}
+
+function tryDetectBph() {
+  // Phasor coherence BPH detector (Watch Accuracy Meter approach).
+  // For each candidate BPH, project tick timestamps onto the unit circle at that
+  // frequency and measure vector coherence.  A correct BPH makes all ticks cluster
+  // at the same phase → coherence ≈ 1.  Wrong BPH → phases spread → coherence ≈ 0.
+  // Works even when most ticks are missed.
+  if (tickTimestamps.length < 10) return;
+  const candidates = [18000, 21600, 25200, 28800, 36000, 72000];
+  const tFirst = tickTimestamps[0].sampleTime;
+  let bestBph = null, bestScore = 0;
+
+  for (const bph of candidates) {
+    const beatPeriodSec = 3600 / bph;
+    let sinSum = 0, cosSum = 0;
+    for (const { sampleTime } of tickTimestamps) {
+      const tSec = (sampleTime - tFirst) / actualSR;
+      const phase = (tSec % beatPeriodSec) / beatPeriodSec * (2 * Math.PI);
+      sinSum += Math.sin(phase);
+      cosSum += Math.cos(phase);
+    }
+    const coherence = Math.sqrt(sinSum * sinSum + cosSum * cosSum) / tickTimestamps.length;
+    if (coherence > bestScore) { bestScore = coherence; bestBph = bph; }
+  }
+
+  // Require >0.5 coherence and at least a 0.1 margin over second-best before committing
+  if (bestScore > 0.5 && bphDetected !== bestBph) {
+    bphDetected = bestBph;
+    document.getElementById('val-bph').textContent = bestBph.toLocaleString();
+    if (workletNode) workletNode.port.postMessage({ type: 'setBPH', bph: bestBph });
+  }
+}
+
+function computeAndDisplay(bph) {
+  // nomInterval: expected seconds between consecutive tick events (tick→tock or tock→tick)
+  // At 28800 BPH: 3600/28800 = 0.125 s = 125 ms
+  const nomInterval = 3600 / bph;
+
+  // Outlier rejection: drop intervals > 1.4× nominal (merged double-intervals
+  // from missed ticks), < 0.6× nominal (spurious noise triggers), and low-SNR
+  // (both bounding ticks must have SNR ≥ 3 to be considered confident detections).
+  const maxValid = nomInterval * 1.4;
+  const minValid = nomInterval * 0.6;
+  const SNR_MIN  = 3.0;
+  const all120 = tickIntervals.slice(-120).filter(
+    t => t.intervalSec >= minValid && t.intervalSec <= maxValid
+  );
+  // Prefer high-SNR intervals; fall back to all valid if not enough high-SNR ones
+  const highSnr = all120.filter(t => (t.snr ?? 0) >= SNR_MIN);
+  const recent  = highSnr.length >= 4 ? highSnr : all120;
+  if (recent.length < 4) return; // not enough clean data yet
+
+  // Pairwise-slope rate estimation (Watch Accuracy Meter approach).
+  // For each pair of tick timestamps ≥2s apart, the number of elapsed beats is
+  // unambiguous (round to nearest integer).  The rate implied by that pair is
+  // independent of missed ticks between them.  Median of all such pair-rates is
+  // very robust to both missed ticks and occasional false triggers.
+  const ratesCandidates = [];
+  const ts = tickTimestamps.slice(-120);
+  for (let i = 0; i < ts.length; i++) {
+    for (let j = i + 1; j < ts.length; j++) {
+      const dtSec = (ts[j].sampleTime - ts[i].sampleTime) / actualSR;
+      if (dtSec < 2.0) continue;           // need ≥2s separation for stability
+      if (dtSec > 60.0) break;             // beyond 60s window, skip
+      const expectedBeats = Math.round(dtSec / nomInterval);
+      if (expectedBeats < 1) continue;
+      const idealDtSec = expectedBeats * nomInterval;
+      // +s/day = fast watch (ticks arrive sooner than expected → dtSec < idealDtSec)
+      const rateSDay = (idealDtSec - dtSec) / idealDtSec * 86400;
+      if (Math.abs(rateSDay) > 300) continue; // ignore wild outliers
+      ratesCandidates.push(rateSDay);
+    }
+  }
+
+  if (ratesCandidates.length < 3 && recent.length < 4) return;
+
+  let computedRate;
+  if (ratesCandidates.length >= 3) {
+    ratesCandidates.sort((a, b) => a - b);
+    computedRate = ratesCandidates[Math.floor(ratesCandidates.length / 2)];
+  } else {
+    // Fallback: simple mean of clean intervals (original approach)
+    const avgInterval = recent.reduce((s, t) => s + t.intervalSec, 0) / recent.length;
+    computedRate = (nomInterval - avgInterval) * (bph / 3600) * 86400;
+  }
+  displayRate = computedRate;
+
+  // 8-second EMA of rate: alpha = 450/bph gives ~8s time constant at any BPH
+  const rateAlpha = 450 / bph;
+  if (displayRateSmooth === null) displayRateSmooth = displayRate;
+  else displayRateSmooth += rateAlpha * (displayRate - displayRateSmooth);
+
+  // Beat error: use only clean intervals, split by parity
+  const p0 = recent.filter(t => t.parity === 0);
+  const p1 = recent.filter(t => t.parity === 1);
+  if (p0.length > 3 && p1.length > 3) {
+    const avg0 = p0.reduce((s, t) => s + t.intervalSec, 0) / p0.length;
+    const avg1 = p1.reduce((s, t) => s + t.intervalSec, 0) / p1.length;
+    displayBeatError = Math.abs(avg0 - avg1) * 1000;
+  }
+
+  // Add trace point
+  const rate = Math.max(-TRACE_Y_RANGE, Math.min(TRACE_Y_RANGE, displayRate));
+  const yFrac = (TRACE_Y_RANGE - rate) / (2 * TRACE_Y_RANGE);
+  const xStep = 1 / (60 * bph / 3600); // one tick-width in a 60-second window
+
+  for (const pt of tracePoints) pt.x -= xStep;
+  tracePoints.push({ x: 1.0, y: yFrac, parity });
+  while (tracePoints.length > 0 && tracePoints[0].x < 0) tracePoints.shift();
+  if (tracePoints.length > MAX_TRACE) tracePoints.shift();
+
+  updateDisplay();
+  drawTrace();
+}
+
+function updateDisplay() {
+  const rateEl = document.getElementById('val-rate');
+  const rateSmoothEl = document.getElementById('val-rate-smooth');
+  if (displayRateSmooth !== null) {
+    const r = displayRateSmooth;
+    rateEl.textContent = (r >= 0 ? '+' : '') + r.toFixed(1);
+    rateEl.className = 'metric-value ' +
+      (Math.abs(r) <= 10 ? 'good' : Math.abs(r) <= 30 ? 'caution' : 'warn');
+  }
+  if (displayRate !== null && rateSmoothEl) {
+    const r = displayRate;
+    rateSmoothEl.textContent = 'now ' + (r >= 0 ? '+' : '') + r.toFixed(1);
+  }
+
+  const beatEl = document.getElementById('val-beat');
+  if (displayBeatError !== null) {
+    const be = displayBeatError;
+    beatEl.textContent = be.toFixed(2);
+    beatEl.className = 'metric-value ' + (be < 0.5 ? 'good' : be < 1.0 ? 'caution' : 'warn');
+  }
+
+  const ampEl = document.getElementById('val-amp');
+  if (displayAmplitude !== null) {
+    const a = displayAmplitude;
+    ampEl.textContent = Math.round(a);
+    ampEl.className = 'metric-value ' +
+      (a >= 250 && a <= 310 ? 'good' : a >= 220 ? 'caution' : 'warn');
+  }
+}
+
+// ── Level / scope messages ───────────────────────────────────────────────────
+function onLevel(rms, noiseFloor, threshold) {
+  const fill  = document.getElementById('level-bar-fill');
+  const label = document.getElementById('snr-label');
+
+  const db  = 20 * Math.log10(Math.max(rms, 1e-9));
+  const pct = Math.min(100, Math.max(0, ((db + 60) / 50) * 100)); // map −60…−10 dB → 0…100%
+  fill.style.width = pct + '%';
+  fill.className = pct < 10 ? 'dim' : pct > 80 ? 'hot' : '';
+
+  const snrDb = 20 * Math.log10(Math.max(rms / Math.max(noiseFloor, 1e-9), 1));
+  label.textContent = snrDb.toFixed(0) + ' dB';
+
+  scopeThreshold  = threshold;
+  scopeNoiseFloor = noiseFloor;
+  document.getElementById('scope-snr').textContent = snrDb.toFixed(0) + ' dB SNR';
+
+  // Weak-signal hint: show after 5s running if SNR < 3 dB and no ticks yet
+  const hintBar  = document.getElementById('hint-bar');
+  const hintText = document.getElementById('hint-text');
+  if (running) {
+    const elapsed = (Date.now() - startTime) / 1000;
+    if (snrDb < 3) {
+      if (!weakSnrSince) weakSnrSince = Date.now();
+      const weakFor = (Date.now() - weakSnrSince) / 1000;
+      if (weakFor >= 5 && elapsed >= 5) {
+        hintBar.style.display = '';
+        if (tickCount === 0) {
+          hintText.textContent = 'No signal — raise gain or move watch closer to mic';
+        } else {
+          hintText.textContent = 'Weak signal — raise gain for more stable readings';
+        }
+      }
+    } else {
+      weakSnrSince = 0;
+      hintBar.style.display = 'none';
+    }
+  }
+}
+
+function onScopeData(data) {
+  for (let i = 0; i < data.length; i++) {
+    scopeBuf[scopeWritePos] = data[i];
+    scopeWritePos = (scopeWritePos + 1) % SCOPE_SIZE;
+  }
+  scopeSampleCount += data.length;
+  // Prune tick markers that have scrolled off the left edge of the scope
+  const oldest = scopeSampleCount - SCOPE_SIZE;
+  while (scopeTickMarkers.length > 0 && scopeTickMarkers[0].sampleTime < oldest) {
+    scopeTickMarkers.shift();
+  }
+  // No drawScope() here — the rAF loop in scopeLoop() handles redraws
+}
+
+// rAF loop for continuous scope refresh when running
+let rafId = null;
+let statusIntervalId = null;
+function scopeLoop() {
+  drawScope();
+  if (running) rafId = requestAnimationFrame(scopeLoop);
+}
+
+// ── Mic device enumeration ───────────────────────────────────────────────────
+async function refreshMicList() {
+  // We need at least one getUserMedia call first for the browser to reveal device labels.
+  // If we haven't had permission yet, labels will be empty — show a prompt.
+  const sel = document.getElementById('sel-mic');
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const mics = devices.filter(d => d.kind === 'audioinput');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">Default</option>';
+    for (const d of mics) {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = d.label || `Mic ${sel.options.length}`;
+      sel.appendChild(opt);
+    }
+    // Restore previous selection if still available
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  } catch { /* ignore */ }
+}
+
+// Populate on load (labels may be blank until permission granted)
+refreshMicList();
+navigator.mediaDevices.addEventListener('devicechange', refreshMicList);
+
+// ── Audio ────────────────────────────────────────────────────────────────────
+async function startAudio() {
+  if (running) { stopAudio(); return; }
+
+  const deviceId = document.getElementById('sel-mic').value;
+  const audioConstraints = {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl:  false,
+    sampleRate:       TARGET_SR,
+  };
+  if (deviceId) audioConstraints.deviceId = { exact: deviceId };
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
+    // Now we have permission — refresh list so labels appear
+    refreshMicList();
+  } catch {
+    alert('Microphone access denied. Allow microphone and reload.');
+    return;
+  }
+
+  audioCtx = new AudioContext({ sampleRate: TARGET_SR });
+  actualSR  = audioCtx.sampleRate; // may differ from TARGET_SR on some systems
+
+  // Always use blob URL — works on file:// and http:// alike
+  const blob    = new Blob([PROCESSOR_SRC], { type: 'application/javascript' });
+  const blobUrl = URL.createObjectURL(blob);
+  await audioCtx.audioWorklet.addModule(blobUrl);
+  URL.revokeObjectURL(blobUrl);
+
+  workletNode = new AudioWorkletNode(audioCtx, 'timegrapher-processor');
+
+  workletNode.port.onmessage = ({ data }) => {
+    if      (data.type === 'tick')  onTick(data.sampleTime, data.snr);
+    else if (data.type === 'level') onLevel(data.rms, data.noiseFloor, data.threshold);
+    else if (data.type === 'scope') onScopeData(data.data);
+  };
+
+  // Push initial parameters
+  const bphVal = document.getElementById('sel-bph').value;
+  if (bphVal !== 'auto') workletNode.port.postMessage({ type: 'setBPH', bph: parseInt(bphVal) });
+  workletNode.port.postMessage({ type: 'setGain',      value: parseFloat(document.getElementById('gain-slider').value) });
+  workletNode.port.postMessage({ type: 'setThreshold', value: parseFloat(document.getElementById('sens-slider').value) });
+
+  micSource = audioCtx.createMediaStreamSource(stream);
+  micSource.connect(workletNode);
+
+  // Processed chain for recording: mic → gain → HPF → LPF → MediaStreamDestination
+  // Recorder taps this so the saved file sounds like the monitor (filtered + gained).
+  procGain = audioCtx.createGain();
+  procGain.gain.value = parseFloat(document.getElementById('gain-slider').value);
+  procHPF = audioCtx.createBiquadFilter();
+  procHPF.type = 'highpass'; procHPF.frequency.value = 600; procHPF.Q.value = 0.707;
+  procLPF = audioCtx.createBiquadFilter();
+  procLPF.type = 'lowpass';  procLPF.frequency.value = 4000; procLPF.Q.value = 0.707;
+  procDest = audioCtx.createMediaStreamDestination();
+  micSource.connect(procGain);
+  procGain.connect(procHPF);
+  procHPF.connect(procLPF);
+  procLPF.connect(procDest);
+  // Do NOT connect to audioCtx.destination — no audio output unless monitor is on
+
+  running = true;
+  startTime = Date.now();
+  weakSnrSince = 0;
+  setRunningUI(true);
+  rafId = requestAnimationFrame(scopeLoop);
+  statusIntervalId = setInterval(() => {
+    if (tickCount >= MIN_TICKS_DISPLAY && displayRate !== null) {
+      document.getElementById('status-pill').textContent = 'ACTIVE';
+      document.getElementById('status-pill').className = 'active';
+    }
+  }, 2000);
+}
+
+function stopAudio() {
+  if (rafId)            { cancelAnimationFrame(rafId); rafId = null; }
+  if (statusIntervalId) { clearInterval(statusIntervalId); statusIntervalId = null; }
+  if (workletNode)      { workletNode.disconnect(); workletNode = null; }
+  if (stream)           { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  if (audioCtx)         { audioCtx.close(); audioCtx = null; }
+  micSource = null;
+  monActive = false; monGain = null; monHPF = null; monLPF = null;
+  procDest = null; procGain = null; procHPF = null; procLPF = null;
+  setMonitorUI(false);
+  stopRecorder();
+  running = false;
+  setRunningUI(false);
+}
+
+function toggleMonitor() {
+  if (!running || !audioCtx || !micSource) return;
+  if (monActive) {
+    // Tear down monitor chain
+    if (monGain) { monGain.disconnect(); }
+    monGain = null; monHPF = null; monLPF = null;
+    monActive = false;
+  } else {
+    // mic → gain → HPF(600) → LPF(4000) → speakers
+    // Uses BiquadFilter (simpler than IIR) — close enough for listening
+    monGain = audioCtx.createGain();
+    monGain.gain.value = parseFloat(document.getElementById('gain-slider').value);
+
+    monHPF = audioCtx.createBiquadFilter();
+    monHPF.type = 'highpass';
+    monHPF.frequency.value = 600;
+    monHPF.Q.value = 0.707;
+
+    monLPF = audioCtx.createBiquadFilter();
+    monLPF.type = 'lowpass';
+    monLPF.frequency.value = 4000;
+    monLPF.Q.value = 0.707;
+
+    micSource.connect(monGain);
+    monGain.connect(monHPF);
+    monHPF.connect(monLPF);
+    monLPF.connect(audioCtx.destination);
+    monActive = true;
+  }
+  setMonitorUI(monActive);
+}
+
+function setMonitorUI(on) {
+  const btn = document.getElementById('monitor-btn');
+  btn.textContent = on ? 'MON ON' : 'MON OFF';
+  btn.style.borderColor = on ? 'var(--amber)' : '';
+  btn.style.color       = on ? 'var(--amber)' : '';
+}
+
+function toggleRecorder() {
+  if (!running || !stream) return;
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop(); // onstop will handle the rest
+  } else {
+    startRecorder();
+  }
+}
+
+function startRecorder() {
+  recChunks = [];
+  const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/ogg'].find(
+    t => MediaRecorder.isTypeSupported(t)
+  ) || '';
+  // Record the processed stream (gain + bandpass) — sounds like the monitor, cleaner for analysis
+  const recStream = (procDest && procDest.stream) ? procDest.stream : stream;
+  mediaRecorder = new MediaRecorder(recStream, mimeType ? { mimeType } : {});
+  const savedMime = mediaRecorder.mimeType; // capture before any async nulling
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    clearInterval(recTimerId); recTimerId = null;
+    document.getElementById('rec-timer-bar').style.display = 'none';
+    const btn = document.getElementById('rec-btn');
+    btn.textContent = '⏺ REC';
+    btn.style.color = ''; btn.style.borderColor = '';
+    mediaRecorder = null;
+
+    if (recChunks.length === 0) return;
+    const blob = new Blob(recChunks, { type: savedMime });
+    const ext  = savedMime.includes('ogg') ? 'ogg' : 'webm';
+    const url  = URL.createObjectURL(blob);
+    // Auto-download — no button to find
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `timegrapher_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+  mediaRecorder.start(1000);
+  recStartMs = Date.now();
+  recTimerId = setInterval(() => {
+    const s = Math.floor((Date.now() - recStartMs) / 1000);
+    document.getElementById('rec-timer').textContent =
+      `● REC ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  }, 500);
+  document.getElementById('rec-timer-bar').style.display = '';
+  document.getElementById('rec-btn').textContent = '■ STOP REC';
+  document.getElementById('rec-btn').style.color = 'var(--red)';
+  document.getElementById('rec-btn').style.borderColor = 'var(--red)';
+}
+
+function stopRecorder() {
+  if (recTimerId) { clearInterval(recTimerId); recTimerId = null; }
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop(); // onstop fires async — let it clean up; don't null here
+  } else {
+    mediaRecorder = null;
+  }
+}
+
+function setRunningUI(on) {
+  const btn  = document.getElementById('start-btn');
+  const pill = document.getElementById('status-pill');
+  btn.textContent = on ? '■ STOP' : '▶ START';
+  btn.className   = on ? 'running' : '';
+  pill.textContent = on ? 'ACQUIRING' : 'STANDBY';
+  pill.className   = on ? 'acquiring' : '';
+}
+
+function resetTrace() {
+  if (workletNode) workletNode.port.postMessage({ type: 'reset' });
+  tracePoints.length = 0;
+  tickIntervals.length = 0;
+  tickTimestamps.length = 0;
+  scopeBuf.fill(0);
+  scopeWritePos  = 0;
+  scopeSampleCount = 0;
+  scopeMaxSeen   = 0.001;
+  scopeTickMarkers.length = 0;
+  tickCount = 0; parity = 0; lastSampleTime = null; lastSnr = null;
+  bphDetected = null;
+  displayRate = displayRateSmooth = displayBeatError = displayAmplitude = null;
+
+  ['val-rate','val-beat','val-amp'].forEach(id => {
+    const el = document.getElementById(id);
+    el.textContent = '—'; el.className = 'metric-value';
+  });
+  const rse = document.getElementById('val-rate-smooth');
+  if (rse) rse.textContent = '';
+  document.getElementById('val-bph').textContent = '—';
+  document.getElementById('tick-count-label').textContent = 'TICKS: 0';
+  if (running) {
+    document.getElementById('status-pill').textContent = 'ACQUIRING';
+    document.getElementById('status-pill').className = 'acquiring';
+  }
+  weakSnrSince = 0;
+  document.getElementById('hint-bar').style.display = 'none';
+  drawTrace(); drawScope();
+}
+
+// ── Event listeners ──────────────────────────────────────────────────────────
+document.getElementById('start-btn').addEventListener('click', startAudio);
+document.getElementById('reset-btn').addEventListener('click', resetTrace);
+document.getElementById('monitor-btn').addEventListener('click', toggleMonitor);
+document.getElementById('refresh-mic-btn').addEventListener('click', refreshMicList);
+document.getElementById('rec-btn').addEventListener('click', toggleRecorder);
+
+document.getElementById('sel-bph').addEventListener('change', (e) => {
+  bphFixed = e.target.value === 'auto' ? null : parseInt(e.target.value);
+  if (workletNode && bphFixed) workletNode.port.postMessage({ type: 'setBPH', bph: bphFixed });
+  resetTrace();
+});
+
+document.getElementById('lift-input').addEventListener('change', (e) => {
+  liftAngle = parseFloat(e.target.value) || 52;
+});
+
+document.getElementById('gain-slider').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  document.getElementById('gain-val').textContent = v + '×';
+  if (workletNode) workletNode.port.postMessage({ type: 'setGain', value: v });
+  if (monGain)  monGain.gain.value  = v;
+  if (procGain) procGain.gain.value = v;
+});
+
+document.getElementById('sens-slider').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  document.getElementById('sens-val').textContent = v.toFixed(1);
+  if (workletNode) workletNode.port.postMessage({ type: 'setThreshold', value: v });
+});
+
+document.getElementById('info-btn').addEventListener('click', () => {
+  document.getElementById('info-overlay').classList.add('visible');
+});
+document.getElementById('info-close').addEventListener('click', () => {
+  document.getElementById('info-overlay').classList.remove('visible');
+});
+document.getElementById('info-overlay').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('info-overlay'))
+    document.getElementById('info-overlay').classList.remove('visible');
+});
+
+// Initial draw
+drawTrace(); drawScope();
+</script>
+</body>
+</html>
