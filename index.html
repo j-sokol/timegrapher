@@ -18,7 +18,7 @@
   --text-pri:    #e8e8e8;
   --text-sec:    #7a8a8e;
   --text-dim:    #3a4a4e;
-  --green:       #39d353;
+  --green:       #ff9a00;
   --cyan:        #00bfff;
   --amber:       #ffbf00;
   --red:         #cc2200;
@@ -177,13 +177,6 @@ body::before {
 .metric-value.caution { color: var(--amber);    text-shadow: 0 0 10px rgba(255,191,0,0.4); }
 .metric-value.warn    { color: var(--red);      text-shadow: 0 0 10px rgba(204,34,0,0.4); }
 .metric-value.cyan    { color: var(--cyan);     text-shadow: 0 0 10px rgba(0,191,255,0.35); }
-.metric-sub {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-sec);
-  letter-spacing: 0.5px;
-  min-height: 13px;
-}
 .metric-unit {
   font-family: var(--font-mono);
   font-size: 9px;
@@ -335,14 +328,14 @@ input[type="range"]::-webkit-slider-thumb {
   width: 12px; height: 12px;
   border-radius: 0;
   background: var(--green);
-  box-shadow: 0 0 5px rgba(57,211,83,0.5);
+  box-shadow: 0 0 5px rgba(255,154,0,0.5);
   cursor: pointer;
 }
 input[type="range"]::-moz-range-thumb {
   width: 12px; height: 12px;
   border: none; border-radius: 0;
   background: var(--green);
-  box-shadow: 0 0 5px rgba(57,211,83,0.5);
+  box-shadow: 0 0 5px rgba(255,154,0,0.5);
   cursor: pointer;
 }
 .slider-val {
@@ -366,8 +359,8 @@ input[type="range"]::-moz-range-thumb {
   color: var(--green);
   cursor: pointer;
   transition: all 0.2s;
-  text-shadow: 0 0 7px rgba(57,211,83,0.3);
-  box-shadow: 0 0 7px rgba(57,211,83,0.1);
+  text-shadow: 0 0 7px rgba(255,154,0,0.3);
+  box-shadow: 0 0 7px rgba(255,154,0,0.1);
   white-space: nowrap;
   align-self: flex-end;
 }
@@ -432,7 +425,7 @@ input[type="range"]::-moz-range-thumb {
   font-size: 10px;
   letter-spacing: 3px;
   color: var(--green);
-  text-shadow: 0 0 7px rgba(57,211,83,0.4);
+  text-shadow: 0 0 7px rgba(255,154,0,0.4);
   margin-bottom: 10px;
   text-transform: uppercase;
 }
@@ -460,7 +453,6 @@ input[type="range"]::-moz-range-thumb {
     <div class="metric-cell panel">
       <div class="metric-label">Rate</div>
       <div class="metric-value" id="val-rate">—</div>
-      <div class="metric-sub" id="val-rate-smooth" title="8-second average"></div>
       <div class="metric-unit">s / day</div>
     </div>
     <div class="metric-cell panel">
@@ -750,7 +742,7 @@ const tickTimestamps = [];  // { sampleTime, snr } — raw timestamps for phasor
 const MAX_INT        = 500;
 const MAX_TS         = 500;
 
-let displayRate = null, displayRateSmooth = null, displayBeatError = null, displayAmplitude = null;
+let displayRate = null, displayBeatError = null, displayAmplitude = null;
 
 // Trace points: { x ∈ [0,1], y ∈ [0,1], parity }
 const tracePoints = [];
@@ -804,7 +796,7 @@ function drawScope() {
   // Noise floor line (very dim)
   const nfY = H - scopeNoiseFloor * scale;
   if (nfY > 0 && nfY < H) {
-    ctx.strokeStyle = 'rgba(57,211,83,0.2)';
+    ctx.strokeStyle = 'rgba(255,154,0,0.2)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, nfY); ctx.lineTo(W, nfY);
@@ -824,9 +816,9 @@ function drawScope() {
   }
 
   // Envelope waveform (green)
-  ctx.strokeStyle = '#39d353';
+  ctx.strokeStyle = '#ff9a00';
   ctx.lineWidth = 1.5;
-  ctx.shadowColor = '#39d353';
+  ctx.shadowColor = '#ff9a00';
   ctx.shadowBlur = 3;
   ctx.beginPath();
   for (let i = 0; i < SCOPE_SIZE; i++) {
@@ -846,7 +838,7 @@ function drawScope() {
     if (offset < 0 || offset >= SCOPE_SIZE) continue;
     const x = (1 - offset / SCOPE_SIZE) * W;
     ctx.strokeStyle = m.parity === 0
-      ? 'rgba(57,211,83,0.7)'    // tick: green
+      ? 'rgba(255,154,0,0.7)'    // tick: green
       : 'rgba(0,191,255,0.7)';   // tock: cyan
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -890,8 +882,8 @@ function drawTrace() {
     ctx.beginPath();
     ctx.arc(x, y, TRACE_DOT_R, 0, Math.PI * 2);
     if (pt.parity === 0) {
-      ctx.fillStyle = '#39d353';
-      ctx.shadowColor = '#39d353';
+      ctx.fillStyle = '#ff9a00';
+      ctx.shadowColor = '#ff9a00';
     } else {
       ctx.fillStyle = '#00bfff';
       ctx.shadowColor = '#00bfff';
@@ -1039,11 +1031,6 @@ function computeAndDisplay(bph) {
   }
   displayRate = computedRate;
 
-  // 8-second EMA of rate: alpha = 450/bph gives ~8s time constant at any BPH
-  const rateAlpha = 450 / bph;
-  if (displayRateSmooth === null) displayRateSmooth = displayRate;
-  else displayRateSmooth += rateAlpha * (displayRate - displayRateSmooth);
-
   // Beat error: use only clean intervals, split by parity
   const p0 = recent.filter(t => t.parity === 0);
   const p1 = recent.filter(t => t.parity === 1);
@@ -1069,16 +1056,11 @@ function computeAndDisplay(bph) {
 
 function updateDisplay() {
   const rateEl = document.getElementById('val-rate');
-  const rateSmoothEl = document.getElementById('val-rate-smooth');
-  if (displayRateSmooth !== null) {
-    const r = displayRateSmooth;
+  if (displayRate !== null) {
+    const r = displayRate;
     rateEl.textContent = (r >= 0 ? '+' : '') + r.toFixed(1);
     rateEl.className = 'metric-value ' +
       (Math.abs(r) <= 10 ? 'good' : Math.abs(r) <= 30 ? 'caution' : 'warn');
-  }
-  if (displayRate !== null && rateSmoothEl) {
-    const r = displayRate;
-    rateSmoothEl.textContent = 'now ' + (r >= 0 ? '+' : '') + r.toFixed(1);
   }
 
   const beatEl = document.getElementById('val-beat');
@@ -1397,14 +1379,12 @@ function resetTrace() {
   scopeTickMarkers.length = 0;
   tickCount = 0; parity = 0; lastSampleTime = null; lastSnr = null; consecutiveValid = 0;
   bphDetected = null;
-  displayRate = displayRateSmooth = displayBeatError = displayAmplitude = null;
+  displayRate = displayBeatError = displayAmplitude = null;
 
   ['val-rate','val-beat','val-amp'].forEach(id => {
     const el = document.getElementById(id);
     el.textContent = '—'; el.className = 'metric-value';
   });
-  const rse = document.getElementById('val-rate-smooth');
-  if (rse) rse.textContent = '';
   document.getElementById('val-bph').textContent = '—';
   document.getElementById('tick-count-label').textContent = 'TICKS: 0';
   if (running) {
