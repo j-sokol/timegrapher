@@ -743,6 +743,7 @@ let recStartMs = 0;
 
 let bphDetected = null, bphFixed = null, liftAngle = 52;
 let parity = 0, tickCount = 0, lastSampleTime = null, lastSnr = null;
+let consecutiveValid = 0;  // consecutive intervals within ±30% of nominal — gates all metric output
 
 const tickIntervals  = [];  // { parity, intervalSec, snr }
 const tickTimestamps = [];  // { sampleTime, snr } — raw timestamps for phasor BPH + pairwise rate
@@ -925,9 +926,18 @@ function onTick(sampleTime, snr) {
     tickIntervals.push({ parity, intervalSec, snr: intervalSnr });
     if (tickIntervals.length > MAX_INT) tickIntervals.shift();
 
+    // Periodicity gate: interval must be within ±30% of nominal to count as valid.
+    // Random knocks produce random gaps → consecutiveValid stays 0 → no metrics shown.
+    const nomInterval = 3600 / bph;
+    if (intervalSec >= nomInterval * 0.7 && intervalSec <= nomInterval * 1.3) {
+      consecutiveValid++;
+    } else {
+      consecutiveValid = 0;
+    }
+
     if (!bphFixed && tickIntervals.length >= 16) tryDetectBph();
 
-    if (tickIntervals.length >= MIN_TICKS_DISPLAY) computeAndDisplay(bph);
+    if (consecutiveValid >= MIN_TICKS_DISPLAY) computeAndDisplay(bph);
   }
   lastSampleTime = sampleTime;
   lastSnr = snr ?? 1;
@@ -1006,6 +1016,9 @@ function computeAndDisplay(bph) {
       const expectedBeats = Math.round(dtSec / nomInterval);
       if (expectedBeats < 1) continue;
       const idealDtSec = expectedBeats * nomInterval;
+      // Residual check: actual dt must be within 20% of nomInterval of the ideal.
+      // A real watch at ±400 s/day accumulates <10ms over 2s; random events fail this.
+      if (Math.abs(dtSec - idealDtSec) > nomInterval * 0.20) continue;
       // +s/day = fast watch (ticks arrive sooner than expected → dtSec < idealDtSec)
       const rateSDay = (idealDtSec - dtSec) / idealDtSec * 86400;
       if (Math.abs(rateSDay) > 300) continue; // ignore wild outliers
@@ -1382,7 +1395,7 @@ function resetTrace() {
   scopeSampleCount = 0;
   scopeMaxSeen   = 0.001;
   scopeTickMarkers.length = 0;
-  tickCount = 0; parity = 0; lastSampleTime = null; lastSnr = null;
+  tickCount = 0; parity = 0; lastSampleTime = null; lastSnr = null; consecutiveValid = 0;
   bphDetected = null;
   displayRate = displayRateSmooth = displayBeatError = displayAmplitude = null;
 
